@@ -1,15 +1,6 @@
--- BlockSpin - Version Fix (Rien ne s'affiche corrigé)
+-- BlockSpin - Auto Farms FIX (Version Améliorée)
 
-local success, ObsidianLib = pcall(function()
-    return loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'))()
-end)
-
-if not success or not ObsidianLib then
-    warn("❌ Impossible de charger Obsidian Library")
-    return
-end
-
--- Charger les addons
+local ObsidianLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'))()
 loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua'))()
 loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua'))()
 
@@ -17,46 +8,98 @@ ObsidianLib.ForceCheckbox = false
 ObsidianLib.ShowToggleFrameInKeybinds = true
 
 local Window = ObsidianLib:CreateWindow({
-    Title = 'anouar777x ez leak haha',
+    Title = 'BlockSpin - Auto Farms Fix',
     Footer = 'credits: Jupiter.exe | Fixed',
     NotifySide = 'Right',
     Icon = 95816097006870,
-    ShowCustomCursor = true
 })
 
--- Tabs
 local TabAutofarm = Window:AddTab('Autofarm', 'wheat')
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
--- ==================== GAS STATION ====================
+-- ==================== GAS STATION AUTOFARM ====================
 local GasGroup = TabAutofarm:AddLeftGroupbox('Gas Station', 'boxes')
-GasGroup:AddLabel('Prends le job Shelf Stocking d’abord !')
+GasGroup:AddLabel('Prends le job "Shelf Stocking" avant !')
 
 GasGroup:AddToggle('GasFarm', {
     Text = 'Autofarm Gas Station',
     Default = false,
     Callback = function(state)
-        print("Gas Station Farm:", state and "ON" or "OFF")
-        -- Le farm sera ajouté après confirmation que le menu s'affiche
+        if not state then return end
+        task.spawn(function()
+            while state do
+                local char = LocalPlayer.Character
+                if not char then task.wait(1) continue end
+                local hum = char:WaitForChild("Humanoid")
+                local root = char:WaitForChild("HumanoidRootPart")
+
+                -- Aller à la zone de travail
+                hum:MoveTo(Vector3.new(150, 255.5, 208))
+                hum.MoveToFinished:Wait()
+                task.wait(0.5)
+
+                -- Activer tous les ProximityPrompts proches
+                for _, obj in ipairs(workspace:GetDescendants()) do
+                    if obj:IsA("ProximityPrompt") and (obj.Parent.Position - root.Position).Magnitude < 12 then
+                        fireproximityprompt(obj, 0)
+                        task.wait(0.6)
+                    end
+                end
+
+                -- Aller aux étagères
+                hum:MoveTo(Vector3.new(131, 255.5, 203))
+                hum.MoveToFinished:Wait()
+                task.wait(1.2)
+            end
+        end)
     end
 })
 
--- ==================== BURGER KING ====================
+-- ==================== BURGER KING AUTOFARM ====================
 local BKGroup = TabAutofarm:AddRightGroupbox('Burger King', 'utensils')
-BKGroup:AddLabel('Prends le job Burger King d’abord !')
+BKGroup:AddLabel('Prends le job Burger King avant !')
 
 BKGroup:AddToggle('BKFarm', {
     Text = 'Autofarm Burger King',
     Default = false,
     Callback = function(state)
-        print("Burger King Farm:", state and "ON" or "OFF")
+        if not state then return end
+        task.spawn(function()
+            while state do
+                local char = LocalPlayer.Character
+                if not char then task.wait(1) continue end
+                local hum = char:WaitForChild("Humanoid")
+                local root = char:WaitForChild("HumanoidRootPart")
+
+                -- Positions Burger King (boucle entre plusieurs spots)
+                local bkPositions = {
+                    Vector3.new(245, 255.5, 180),
+                    Vector3.new(239, 255.5, 193),
+                    Vector3.new(252, 255.5, 176),
+                    Vector3.new(240, 255.5, 170)
+                }
+
+                for _, pos in ipairs(bkPositions) do
+                    if not state then break end
+                    hum:MoveTo(pos)
+                    hum.MoveToFinished:Wait()
+                    task.wait(0.5)
+
+                    -- Fire tous les prompts proches
+                    for _, obj in ipairs(workspace:GetDescendants()) do
+                        if obj:IsA("ProximityPrompt") and (obj.Parent.Position - root.Position).Magnitude < 15 then
+                            fireproximityprompt(obj, 0)
+                            task.wait(0.7)
+                        end
+                    end
+                end
+                task.wait(1)
+            end
+        end)
     end
 })
 
--- Test message
-ObsidianLib:Notify({
-    Title = 'BlockSpin',
-    Content = 'Script chargé avec succès !',
-    Duration = 5
-})
+ObsidianLib:Notify({Title = "BlockSpin", Content = "Auto Farms chargés ! Active les toggles.", Duration = 6})
 
-print("✅ BlockSpin chargé - Si tu ne vois rien, dis-moi")
+print("✅ Auto Farms améliorés chargés")
