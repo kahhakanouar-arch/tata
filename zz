@@ -1,0 +1,62 @@
+-- BlockSpin - Version Fix (Rien ne s'affiche corrigé)
+
+local success, ObsidianLib = pcall(function()
+    return loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'))()
+end)
+
+if not success or not ObsidianLib then
+    warn("❌ Impossible de charger Obsidian Library")
+    return
+end
+
+-- Charger les addons
+loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua'))()
+loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua'))()
+
+ObsidianLib.ForceCheckbox = false
+ObsidianLib.ShowToggleFrameInKeybinds = true
+
+local Window = ObsidianLib:CreateWindow({
+    Title = 'anouar777x ez leak haha',
+    Footer = 'credits: Jupiter.exe | Fixed',
+    NotifySide = 'Right',
+    Icon = 95816097006870,
+    ShowCustomCursor = true
+})
+
+-- Tabs
+local TabAutofarm = Window:AddTab('Autofarm', 'wheat')
+
+-- ==================== GAS STATION ====================
+local GasGroup = TabAutofarm:AddLeftGroupbox('Gas Station', 'boxes')
+GasGroup:AddLabel('Prends le job Shelf Stocking d’abord !')
+
+GasGroup:AddToggle('GasFarm', {
+    Text = 'Autofarm Gas Station',
+    Default = false,
+    Callback = function(state)
+        print("Gas Station Farm:", state and "ON" or "OFF")
+        -- Le farm sera ajouté après confirmation que le menu s'affiche
+    end
+})
+
+-- ==================== BURGER KING ====================
+local BKGroup = TabAutofarm:AddRightGroupbox('Burger King', 'utensils')
+BKGroup:AddLabel('Prends le job Burger King d’abord !')
+
+BKGroup:AddToggle('BKFarm', {
+    Text = 'Autofarm Burger King',
+    Default = false,
+    Callback = function(state)
+        print("Burger King Farm:", state and "ON" or "OFF")
+    end
+})
+
+-- Test message
+ObsidianLib:Notify({
+    Title = 'BlockSpin',
+    Content = 'Script chargé avec succès !',
+    Duration = 5
+})
+
+print("✅ BlockSpin chargé - Si tu ne vois rien, dis-moi")
