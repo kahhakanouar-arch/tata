@@ -1,249 +1,499 @@
--- BlockSpin Autofarm GUI
--- Cleaned up and functional version
+-- BlockSpin Autofarm GUI - Version Humanoid Pathfinder uniquement
+-- Corrigé et fonctionnel
 
 local Players = game:GetService('Players')
 local PathfindingService = game:GetService('PathfindingService')
-local TweenService = game:GetService('TweenService')
 local RunService = game:GetService('RunService')
 local Workspace = game:GetService('Workspace')
-local CoreGui = game:GetService('CoreGui')
+local TweenService = game:GetService('TweenService')
 
 local LocalPlayer = Players.LocalPlayer
 
 -- Load Obsidian Library
-local HttpGetContent = game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua')
-local ObsidianLib = loadstring(HttpGetContent)()
-
--- Load addons
-local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua'))()
+local ObsidianLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/Library.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua'))()
 
--- Settings
 ObsidianLib.ForceCheckbox = false
 ObsidianLib.ShowToggleFrameInKeybinds = true
 
 -- Create Window
 local Window = ObsidianLib:CreateWindow({
     Title = 'BlockSpin Autofarm',
-    Footer = 'credits: Jupiter.exe',
+    Footer = 'Humanoid Pathfinder Only',
     NotifySide = 'Right',
     Icon = 95816097006870,
     ShowCustomCursor = true
 })
 
--- Tabs
 local AutofarmTab = Window:AddTab('Autofarm', 'wheat')
 local SettingsTab = Window:AddTab('Settings', 'sliders-horizontal')
-local UITab = Window:AddTab('UI Settings', 'settings')
 
 -- ==========================================
--- AUTOFARM SECTIONS
+-- VARIABLES GLOBALES
 -- ==========================================
 
-local GasGroup = AutofarmTab:AddLeftGroupbox('Gas Station', 'fuel')
-local BurgerGroup = AutofarmTab:AddRightGroupbox('Burger King', 'utensils')
+local GasStationEnabled = false
+local BurgerKingEnabled = false
+local CurrentPath = nil
+local PathRender = nil
 
 -- ==========================================
--- GAS STATION AUTOFARM
+-- FONCTIONS UTILES
 -- ==========================================
 
-local GasStationRunning = false
-local GasStationConnection = nil
+local function GetCharacter()
+    return LocalPlayer.Character
+end
 
-local function StopGasStation()
-    GasStationRunning = false
-    if GasStationConnection then
-        GasStationConnection:Disconnect()
-        GasStationConnection = nil
+local function GetHumanoid()
+    local char = GetCharacter()
+    return char and char:FindFirstChildOfClass('Humanoid')
+end
+
+local function GetHRP()
+    local char = GetCharacter()
+    return char and char:FindFirstChild('HumanoidRootPart')
+end
+
+local function WaitForCharacter()
+    local char = LocalPlayer.Character
+    if not char then
+        LocalPlayer.CharacterAdded:Wait()
+        char = LocalPlayer.Character
+    end
+    return char
+end
+
+-- Pathfinding avancé avec visualisation
+local function CreatePath(startPos, endPos)
+    local path = PathfindingService:CreatePath({
+        AgentHeight = 5,
+        AgentRadius = 2,
+        AgentCanJump = true,
+        AgentJumpHeight = 10,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 4
+    })
+    
+    local success, errorMessage = pcall(function()
+        path:ComputeAsync(startPos, endPos)
+    end)
+    
+    if success and path.Status == Enum.PathStatus.Success then
+        return path
+    else
+        warn('Pathfinding failed:', errorMessage or path.Status)
+        return nil
+    end
+end
+
+local function WalkPath(path, humanoid)
+    if not path then return false end
+    
+    local waypoints = path:GetWaypoints()
+    if #waypoints == 0 then return false end
+    
+    for i, waypoint in ipairs(waypoints) do
+        if not GasStationEnabled and not BurgerKingEnabled then 
+            humanoid:MoveTo(humanoid.RootPart.Position)
+            return false 
+        end
+        
+        humanoid:MoveTo(waypoint.Position)
+        
+        -- Attendre que le humanoid arrive ou que le chemin change
+        local reached = false
+        local connection
+        connection = humanoid.MoveToFinished:Connect(function(arrived)
+            reached = arrived
+            connection:Disconnect()
+        end)
+        
+        -- Timeout de sécurité
+        local startTime = tick()
+        while not reached and (tick() - startTime) < 3 do
+            if not GasStationEnabled and not BurgerKingEnabled then
+                connection:Disconnect()
+                return false
+            end
+            RunService.Heartbeat:Wait()
+        end
+        
+        connection:Disconnect()
+        
+        -- Si waypoint nécessite un saut
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            task.wait(0.3)
+        end
+    end
+    
+    return true
+end
+
+local function MoveToPosition(targetPos, humanoid)
+    if not humanoid or not humanoid.RootPart then return false end
+    
+    local startPos = humanoid.RootPart.Position
+    local path = CreatePath(startPos, targetPos)
+    
+    if path then
+        return WalkPath(path, humanoid)
+    else
+        -- Fallback: déplacement direct
+        humanoid:MoveTo(targetPos)
+        humanoid.MoveToFinished:Wait()
+        return true
+    end
+end
+
+-- ==========================================
+-- GAS STATION AUTOFARM - CORRIGÉ
+-- ==========================================
+
+local GasGroup = AutofarmTab:AddLeftGroupbox('⛽ Gas Station', 'fuel')
+
+local GasConnections = {}
+
+local function ClearGasConnections()
+    for _, conn in ipairs(GasConnections) do
+        if conn then conn:Disconnect() end
+    end
+    GasConnections = {}
+end
+
+local function GetGasStationObjects()
+    local map = Workspace:FindFirstChild('Map')
+    if not map then return nil end
+    
+    local tiles = map:FindFirstChild('Tiles')
+    if not tiles then return nil end
+    
+    local gasTile = tiles:FindFirstChild('GasStationTile')
+    if not gasTile then return nil end
+    
+    local quick11 = gasTile:FindFirstChild('Quick11')
+    if not quick11 then return nil end
+    
+    local interior = quick11:FindFirstChild('Interior')
+    if not interior then return nil end
+    
+    local jobFolder = interior:FindFirstChild('ShelfStockingJob')
+    if not jobFolder then return nil end
+    
+    return jobFolder
+end
+
+local function DisableDoors()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA('BasePart') and obj.Name:lower():find('door') then
+            obj.CanCollide = false
+            obj.CanQuery = false
+        end
     end
 end
 
 local function GasStationLoop()
-    while GasStationRunning do
+    while GasStationEnabled do
         local success, err = pcall(function()
-            -- Disable door collisions
-            for _, obj in ipairs(Workspace:GetDescendants()) do
-                if obj:IsA('BasePart') and obj.Name:lower():find('door') then
-                    obj.CanQuery = false
-                end
+            -- Attendre le personnage
+            local char = WaitForCharacter()
+            local humanoid = char:WaitForChild('Humanoid')
+            local hrp = char:WaitForChild('HumanoidRootPart')
+            
+            task.wait(0.5)
+            
+            -- Désactiver les portes
+            DisableDoors()
+            
+            -- Récupérer les objets
+            local jobFolder = GetGasStationObjects()
+            if not jobFolder then
+                ObsidianLib:Notify({
+                    Title = 'Gas Station',
+                    Content = 'Job folder not found! Take the job first.',
+                    Duration = 3
+                })
+                task.wait(2)
+                return
             end
-            
-            local character = LocalPlayer.Character
-            if not character then return end
-            
-            local humanoid = character:FindFirstChild('Humanoid')
-            local hrp = character:FindFirstChild('HumanoidRootPart')
-            if not humanoid or not hrp then return end
-            
-            -- Get job locations
-            local gasTile = Workspace:FindFirstChild('Map') and Workspace.Map:FindFirstChild('Tiles') and Workspace.Map.Tiles:FindFirstChild('GasStationTile')
-            if not gasTile then return end
-            
-            local quick11 = gasTile:FindFirstChild('Quick11')
-            if not quick11 then return end
-            
-            local interior = quick11:FindFirstChild('Interior')
-            if not interior then return end
-            
-            local jobFolder = interior:FindFirstChild('ShelfStockingJob')
-            if not jobFolder then return end
             
             local box = jobFolder:FindFirstChild('NormalBox')
             local shelves = jobFolder:FindFirstChild('Shelves')
             
-            if not box or not shelves then return end
-            
-            local prompt = box:FindFirstChildOfClass('ProximityPrompt')
-            
-            -- Movement Mode: Tween (Fast) or Humanoid (Pathfinder)
-            local moveMode = ObsidianLib.Options.MovementMode and ObsidianLib.Options.MovementMode.Value or 'Tween (Fast)'
-            
-            if moveMode == 'Tween (Fast)' then
-                -- Fast tween movement
-                local function TweenToPosition(targetPos)
-                    local distance = (hrp.Position - targetPos).Magnitude
-                    local tweenInfo = TweenInfo.new(distance / 50, Enum.EasingStyle.Linear)
-                    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = CFrame.new(targetPos)})
-                    tween:Play()
-                    tween.Completed:Wait()
-                end
-                
-                -- Go to box
-                TweenToPosition(Vector3.new(149.924, 255.467, 208.347))
-                task.wait(0.3)
-                
-                -- Grab box
-                if prompt then
-                    fireproximityprompt(prompt)
-                end
-                task.wait(0.5)
-                
-                -- Go to shelves
-                TweenToPosition(Vector3.new(130.808, 255.467, 203.295))
-                task.wait(0.5)
-                
-            else
-                -- Humanoid pathfinding
-                local path = PathfindingService:CreatePath({
-                    AgentHeight = 5,
-                    AgentRadius = 2,
-                    AgentCanJump = true
+            if not box or not shelves then
+                ObsidianLib:Notify({
+                    Title = 'Gas Station',
+                    Content = 'Box or shelves not found!',
+                    Duration = 3
                 })
-                
-                -- Path to box
-                path:ComputeAsync(hrp.Position, Vector3.new(149.924, 255.467, 208.347))
-                path:MoveTo(humanoid)
-                humanoid.MoveToFinished:Wait()
-                task.wait(0.3)
-                
-                -- Grab box
-                if prompt then
-                    fireproximityprompt(prompt)
-                end
-                task.wait(0.5)
-                
-                -- Path to shelves
-                path:ComputeAsync(hrp.Position, Vector3.new(130.808, 255.467, 203.295))
-                path:MoveTo(humanoid)
-                humanoid.MoveToFinished:Wait()
-                task.wait(0.5)
+                task.wait(2)
+                return
             end
             
-            -- Stock shelves logic
-            for _, shelf in ipairs(shelves:GetChildren()) do
-                if not GasStationRunning then break end
-                for _, attachment in ipairs(shelf:GetChildren()) do
-                    if attachment:IsA('Attachment') then
-                        -- Check distance and interact
-                        local dist = (attachment.WorldPosition - hrp.Position).Magnitude
-                        if dist < 10 then
-                            -- Shelf stocking interaction would go here
-                            task.wait(0.1)
+            -- Position de la boîte (ajustée selon la map)
+            local boxPos = box:GetPivot().Position
+            
+            -- 1. Aller chercher la boîte
+            ObsidianLib:Notify({
+                Title = 'Gas Station',
+                Content = 'Moving to box...',
+                Duration = 2
+            })
+            
+            local moved = MoveToPosition(boxPos + Vector3.new(0, 0, 3), humanoid)
+            if not moved then return end
+            
+            task.wait(0.3)
+            
+            -- Interagir avec la boîte
+            local prompt = box:FindFirstChildOfClass('ProximityPrompt')
+            if prompt then
+                fireproximityprompt(prompt)
+                ObsidianLib:Notify({
+                    Title = 'Gas Station',
+                    Content = 'Box grabbed!',
+                    Duration = 1
+                })
+            end
+            
+            task.wait(0.8)
+            
+            -- 2. Aller aux étagères
+            local shelfList = shelves:GetChildren()
+            if #shelfList == 0 then
+                ObsidianLib:Notify({
+                    Title = 'Gas Station',
+                    Content = 'No shelves found!',
+                    Duration = 2
+                })
+                return
+            end
+            
+            -- Trouver l'étagère la plus proche avec un slot vide
+            for _, shelf in ipairs(shelfList) do
+                if not GasStationEnabled then break end
+                
+                local shelfPos = shelf:GetPivot().Position
+                local distance = (shelfPos - hrp.Position).Magnitude
+                
+                if distance < 100 then
+                    ObsidianLib:Notify({
+                        Title = 'Gas Station',
+                        Content = 'Stocking shelf...',
+                        Duration = 1
+                    })
+                    
+                    -- Se déplacer devant l'étagère
+                    local targetPos = shelfPos + Vector3.new(0, 0, 4)
+                    moved = MoveToPosition(targetPos, humanoid)
+                    
+                    if moved then
+                        task.wait(0.5)
+                        
+                        -- Chercher les prompts sur l'étagère
+                        for _, child in ipairs(shelf:GetDescendants()) do
+                            if child:IsA('ProximityPrompt') then
+                                fireproximityprompt(child)
+                                task.wait(0.3)
+                            end
                         end
                     end
+                    
+                    task.wait(0.5)
                 end
             end
         end)
         
         if not success then
             warn('Gas Station Error:', err)
+            ObsidianLib:Notify({
+                Title = 'Error',
+                Content = tostring(err):sub(1, 50),
+                Duration = 3
+            })
         end
         
-        task.wait(0.5)
+        task.wait(1)
     end
 end
 
-GasGroup:AddLabel('⚠️ Take the Job before starting!')
+GasGroup:AddLabel('⚠️ PRENDS LE JOB AVANT DE START!')
 
 GasGroup:AddToggle('GasStationToggle', {
     Text = 'Enable Gas Station Autofarm',
     Default = false,
     Callback = function(Value)
+        GasStationEnabled = Value
+        
         if Value then
-            GasStationRunning = true
-            GasStationConnection = RunService.Heartbeat:Connect(function()
-                if not GasStationRunning then return end
-                -- Loop handled in spawn
-            end)
+            ObsidianLib:Notify({
+                Title = 'Gas Station',
+                Content = 'Autofarm started!',
+                Duration = 3
+            })
             task.spawn(GasStationLoop)
         else
-            StopGasStation()
+            ClearGasConnections()
+            local hum = GetHumanoid()
+            if hum then
+                hum:MoveTo(hum.RootPart.Position)
+            end
+            ObsidianLib:Notify({
+                Title = 'Gas Station',
+                Content = 'Autofarm stopped.',
+                Duration = 2
+            })
         end
     end
 })
 
 -- ==========================================
--- BURGER KING AUTOFARM
+-- BURGER KING AUTOFARM - CORRIGÉ
 -- ==========================================
 
-local BurgerKingRunning = false
-local BurgerKingConnection = nil
+local BurgerGroup = AutofarmTab:AddRightGroupbox('🍔 Burger King', 'utensils')
 
-local function StopBurgerKing()
-    BurgerKingRunning = false
-    if BurgerKingConnection then
-        BurgerKingConnection:Disconnect()
-        BurgerKingConnection = nil
+local BurgerConnections = {}
+
+local function ClearBurgerConnections()
+    for _, conn in ipairs(BurgerConnections) do
+        if conn then conn:Disconnect() end
     end
+    BurgerConnections = {}
+end
+
+local function GetBurgerKingObjects()
+    local map = Workspace:FindFirstChild('Map')
+    if not map then return nil end
+    
+    local tiles = map:FindFirstChild('Tiles')
+    if not tiles then return nil end
+    
+    return tiles:FindFirstChild('BurgerPlaceTile')
+end
+
+local function FindJobPrompts(tile)
+    local prompts = {}
+    
+    for _, obj in ipairs(tile:GetDescendants()) do
+        if obj:IsA('ProximityPrompt') then
+            local parentName = obj.Parent and obj.Parent.Name:lower() or ''
+            local name = obj.Name:lower()
+            
+            -- Détecter les stations de travail
+            if parentName:find('register') or 
+               parentName:find('grill') or 
+               parentName:find('fryer') or
+               parentName:find('counter') or
+               parentName:find('order') or
+               name:find('work') or
+               name:find('interact') then
+                
+                table.insert(prompts, {
+                    Prompt = obj,
+                    Position = obj.Parent:GetPivot().Position,
+                    Type = parentName
+                })
+            end
+        end
+    end
+    
+    return prompts
+end
+
+local function FindCustomers(tile)
+    local customers = {}
+    
+    for _, obj in ipairs(tile:GetDescendants()) do
+        if obj:IsA('Humanoid') and obj.Parent then
+            local isPlayer = Players:GetPlayerFromCharacter(obj.Parent)
+            if not isPlayer then
+                -- C'est un NPC
+                local hrp = obj.Parent:FindFirstChild('HumanoidRootPart')
+                if hrp then
+                    table.insert(customers, {
+                        Humanoid = obj,
+                        HRP = hrp,
+                        Position = hrp.Position
+                    })
+                end
+            end
+        end
+    end
+    
+    return customers
 end
 
 local function BurgerKingLoop()
-    while BurgerKingRunning do
+    while BurgerKingEnabled do
         local success, err = pcall(function()
-            local character = LocalPlayer.Character
-            if not character then return end
+            local char = WaitForCharacter()
+            local humanoid = char:WaitForChild('Humanoid')
+            local hrp = char:WaitForChild('HumanoidRootPart')
             
-            local humanoid = character:FindFirstChild('Humanoid')
-            local hrp = character:FindFirstChild('HumanoidRootPart')
-            if not humanoid or not hrp then return end
+            task.wait(0.5)
             
-            -- Find Burger King tile
-            local burgerTile = Workspace:FindFirstChild('Map') and Workspace.Map:FindFirstChild('Tiles') and Workspace.Map.Tiles:FindFirstChild('BurgerPlaceTile')
-            if not burgerTile then return end
+            local tile = GetBurgerKingObjects()
+            if not tile then
+                ObsidianLib:Notify({
+                    Title = 'Burger King',
+                    Content = 'BurgerPlaceTile not found! Take the job first.',
+                    Duration = 3
+                })
+                task.wait(2)
+                return
+            end
             
-            -- Scan for job-related objects
-            for _, obj in ipairs(burgerTile:GetDescendants()) do
-                if not BurgerKingRunning then break end
+            -- Chercher les stations de travail
+            local prompts = FindJobPrompts(tile)
+            
+            if #prompts > 0 then
+                -- Aller à chaque station et interagir
+                for _, station in ipairs(prompts) do
+                    if not BurgerKingEnabled then break end
+                    
+                    local distance = (station.Position - hrp.Position).Magnitude
+                    
+                    if distance > 5 then
+                        ObsidianLib:Notify({
+                            Title = 'Burger King',
+                            Content = 'Moving to ' .. station.Type .. '...',
+                            Duration = 1
+                        })
+                        
+                        local targetPos = station.Position + Vector3.new(0, 0, 3)
+                        local moved = MoveToPosition(targetPos, humanoid)
+                        
+                        if moved then
+                            task.wait(0.3)
+                        end
+                    end
+                    
+                    -- Interagir
+                    fireproximityprompt(station.Prompt)
+                    task.wait(0.5)
+                end
+            end
+            
+            -- Chercher les clients
+            local customers = FindCustomers(tile)
+            
+            for _, customer in ipairs(customers) do
+                if not BurgerKingEnabled then break end
                 
-                if obj:IsA('Humanoid') and obj.Parent ~= character then
-                    -- Found NPC/Customer - interact logic here
-                    local npcHrp = obj.Parent:FindFirstChild('HumanoidRootPart')
-                    if npcHrp then
-                        local distance = (npcHrp.Position - hrp.Position).Magnitude
-                        if distance < 50 then
-                            -- Move to NPC and interact
-                            -- Add your specific Burger King job logic here
-                        end
-                    end
-                elseif obj:IsA('ProximityPrompt') then
-                    -- Check for order stations, grills, etc
-                    local parentName = obj.Parent and obj.Parent.Name:lower() or ''
-                    if parentName:find('order') or parentName:find('grill') or parentName:find('register') then
-                        local distance = (obj.Parent.Position - hrp.Position).Magnitude
-                        if distance < 20 then
-                            fireproximityprompt(obj)
-                        end
-                    end
+                local distance = (customer.Position - hrp.Position).Magnitude
+                
+                if distance < 50 and distance > 5 then
+                    ObsidianLib:Notify({
+                        Title = 'Burger King',
+                        Content = 'Serving customer...',
+                        Duration = 1
+                    })
+                    
+                    local targetPos = customer.Position + Vector3.new(2, 0, 2)
+                    MoveToPosition(targetPos, humanoid)
+                    task.wait(0.5)
                 end
             end
         end)
@@ -252,64 +502,67 @@ local function BurgerKingLoop()
             warn('Burger King Error:', err)
         end
         
-        task.wait(0.5)
+        task.wait(1)
     end
 end
 
-BurgerGroup:AddLabel('⚠️ Take the Job before starting!')
+BurgerGroup:AddLabel('⚠️ PRENDS LE JOB AVANT DE START!')
 
 BurgerGroup:AddToggle('BurgerKingToggle', {
     Text = 'Enable Burger King Autofarm',
     Default = false,
     Callback = function(Value)
+        BurgerKingEnabled = Value
+        
         if Value then
-            BurgerKingRunning = true
-            BurgerKingConnection = RunService.Heartbeat:Connect(function()
-                if not BurgerKingRunning then return end
-            end)
+            ObsidianLib:Notify({
+                Title = 'Burger King',
+                Content = 'Autofarm started!',
+                Duration = 3
+            })
             task.spawn(BurgerKingLoop)
         else
-            StopBurgerKing()
+            ClearBurgerConnections()
+            local hum = GetHumanoid()
+            if hum then
+                hum:MoveTo(hum.RootPart.Position)
+            end
+            ObsidianLib:Notify({
+                Title = 'Burger King',
+                Content = 'Autofarm stopped.',
+                Duration = 2
+            })
         end
     end
 })
 
 -- ==========================================
--- MOVEMENT SETTINGS
+-- SETTINGS
 -- ==========================================
 
-local MovementGroup = SettingsTab:AddLeftGroupbox('Movement', 'move')
+local SettingsGroup = SettingsTab:AddLeftGroupbox('Pathfinder Settings', 'settings')
 
-MovementGroup:AddDropdown('MovementMode', {
-    Text = 'Movement Mode',
-    Values = {
-        'Humanoid (Pathfinder)',
-        'Tween (Fast)'
-    },
-    Default = 'Tween (Fast)'
-})
-
-MovementGroup:AddSlider('TweenSpeed', {
-    Text = 'Tween Speed',
+SettingsGroup:AddSlider('PathSpeed', {
+    Text = 'Pathfinding Speed',
     Min = 10,
-    Max = 200,
-    Default = 50,
-    Rounding = 0
+    Max = 50,
+    Default = 16,
+    Rounding = 0,
+    Callback = function(Value)
+        local hum = GetHumanoid()
+        if hum then
+            hum.WalkSpeed = Value
+        end
+    end
 })
 
--- ==========================================
--- SAFETY SETTINGS
--- ==========================================
-
-local SafetyGroup = SettingsTab:AddRightGroupbox('Safety', 'shield')
-
-SafetyGroup:AddToggle('AntiAFK', {
+SettingsGroup:AddToggle('AntiAFK', {
     Text = 'Anti-AFK',
     Default = true,
     Callback = function(Value)
         if Value then
             local vu = game:GetService("VirtualUser")
-            game:GetService("Players").LocalPlayer.Idled:Connect(function()
+            LocalPlayer.Idled:Connect(function()
                 vu:Button2Down(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
                 task.wait(1)
                 vu:Button2Up(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
@@ -318,96 +571,41 @@ SafetyGroup:AddToggle('AntiAFK', {
     end
 })
 
-SafetyGroup:AddToggle('HideGUI', {
-    Text = 'Hide GUI on Keybind',
-    Default = false
-})
-
--- ==========================================
--- UI SETTINGS
--- ==========================================
-
-local MenuGroup = UITab:AddLeftGroupbox('Menu', 'wrench')
-
-MenuGroup:AddToggle('KeybindMenuOpen', {
-    Text = 'Open Keybind Menu',
-    Default = false,
-    Callback = function(Value)
-        ObsidianLib.KeybindFrame.Visible = Value
+SettingsGroup:AddButton('Reset Character', function()
+    local char = GetCharacter()
+    if char then
+        local hum = char:FindFirstChildOfClass('Humanoid')
+        if hum then
+            hum.Health = 0
+        end
     end
-})
-
-MenuGroup:AddToggle('ShowCustomCursor', {
-    Text = 'Custom Cursor',
-    Default = true,
-    Callback = function(Value)
-        ObsidianLib.ShowCustomCursor = Value
-    end
-})
-
-MenuGroup:AddDropdown('NotificationSide', {
-    Text = 'Notification Side',
-    Values = {'Left', 'Right'},
-    Default = 'Right',
-    Callback = function(Value)
-        ObsidianLib:SetNotifySide(Value)
-    end
-})
-
-MenuGroup:AddDropdown('DPIDropdown', {
-    Text = 'DPI Scale',
-    Values = {'50%', '75%', '100%', '125%', '150%', '175%', '200%'},
-    Default = '100%',
-    Callback = function(Value)
-        local scale = tonumber(Value:gsub('%%', ''))
-        ObsidianLib:SetDPIScale(scale)
-    end
-})
-
-MenuGroup:AddSlider('UICornerSlider', {
-    Text = 'Corner Radius',
-    Min = 0,
-    Max = 20,
-    Default = 4,
-    Rounding = 0,
-    Callback = function(Value)
-        Window:SetCornerRadius(Value)
-    end
-})
-
-MenuGroup:AddDivider()
-
-local MenuKeybind = MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
-    NoUI = true,
-    Default = 'RightShift',
-    Text = 'Menu keybind'
-})
-
-ObsidianLib.ToggleKeybind = ObsidianLib.Options.MenuKeybind
-
-MenuGroup:AddButton('Unload', function()
-    StopGasStation()
-    StopBurgerKing()
-    ObsidianLib:Unload()
 end)
 
 -- ==========================================
--- SAVE MANAGER SETUP
+-- SAVE MANAGER
 -- ==========================================
 
 ObsidianLib:SetFolder('BlockSpin')
-SaveManager:SetFolder('BlockSpin/autofarm')
-SaveManager:BuildConfigSection(UITab)
+SaveManager:SetFolder('BlockSpin/autofarm-v2')
+SaveManager:BuildConfigSection(SettingsTab)
 SaveManager:LoadAutoloadConfig()
 
 -- ==========================================
--- NOTIFICATION
+-- INITIALISATION
 -- ==========================================
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    local hum = char:FindFirstChildOfClass('Humanoid')
+    if hum and ObsidianLib.Options.PathSpeed then
+        hum.WalkSpeed = ObsidianLib.Options.PathSpeed.Value
+    end
+end)
 
 ObsidianLib:Notify({
     Title = 'BlockSpin Autofarm',
-    Content = 'GUI Loaded Successfully!',
+    Content = 'Humanoid Pathfinder loaded! Prends le job avant de start.',
     Duration = 5
 })
 
-print('BlockSpin Autofarm GUI Loaded')
+print('✅ BlockSpin Autofarm GUI Loaded - Humanoid Pathfinder Only')
